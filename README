@@ -1,0 +1,5 @@
+To build, I needed to install some libraries.  From Ubuntu 14.04:
+
+libgl1-mesa-dev
+libglu1-mesa-dev
+freeglut3-dev
