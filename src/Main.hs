@@ -80,8 +80,8 @@ render game = mconcat  [ renderRiver game
                        ]
 
 renderRiver :: GameState -> Picture
-renderRiver game = mconcat [ rectangleSolid 800 5
-                           , translate 0 100 $ rectangleSolid 800 3
+renderRiver game = mconcat [ translate 0 (-100) (rectangleSolid 800 5)
+                           , translate 0 0 (rectangleSolid 800 3)
                            ]
 
 renderBreath :: GameState -> Picture
