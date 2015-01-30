@@ -6,6 +6,7 @@ import Graphics.Gloss
 import Graphics.Gloss.Interface.Pure.Game
 import Graphics.Gloss.Data.Color
 import Graphics.Gloss.Data.ViewPort
+import Graphics.Gloss.Juicy
 
 import Data.Monoid
 import Control.Monad.State
@@ -35,23 +36,37 @@ data BreathState = BreathState { _level :: Float
 data GameState = GameState { _keyState :: KeyboardState
                            , _breath :: BreathState
                            , _viewPort :: ViewPort
+                           , _bird :: Bird
+                           , _assets :: Assets
+                           , _time :: Float
+                           , _ripplePos :: Ripple
                            }
 
 data KeyboardState = KeyboardState { _spacePressed :: Bool
                                    , _lastPress :: Float
                                    }
 
+data Bird = Bird { _position :: (Float, Float)
+                 , _rotation :: Float
+                 }
+
+data Assets = Assets { _birdDown :: Picture
+                     , _birdUp :: Picture
+                     , _ripple :: Picture
+                     }
+                     
+type Ripple = (Float, Float)
+
 makeLenses ''BreathState
 makeLenses ''GameState
 makeLenses ''KeyboardState
+makeLenses ''Bird
+makeLenses ''Assets
 
-initialState :: GameState
-initialState = GameState (KeyboardState False 1000000) (BreathState 30 Exhale 0 0) viewPortInit
+initialState :: Assets -> GameState
+initialState assets = GameState (KeyboardState False 1000000) (BreathState 30 Exhale 0 0) viewPortInit (Bird (0,0) 0) assets 0 (-100,0)
 
 type Time = Float
-
-main :: IO ()
-main = play (InWindow "Relax!" (800, 600) (0,0)) background 60 initialState render guardEvent tick
 
 tick :: Float -> GameState -> GameState
 tick f = execState $ do
@@ -61,7 +76,12 @@ tick f = execState $ do
       else breath.level -= 8*f
     breath.level %= max 0
     keyState.lastPress += f
-    -- viewPort.viewTranslate._2 -= 1
+    if gameState^.breath.level < exhaleTo - exhaleDiameter/2
+       then breath.direction .= Inhale
+       else if gameState^.breath.level > inhaleTo + inhaleDiameter/2
+               then breath.direction .= Exhale
+               else return ()
+    time += f
 
 viewTranslate :: Lens' ViewPort (Float, Float)
 viewTranslate f (ViewPort t r s) = fmap (\t' -> ViewPort t' r s) (f t)
@@ -110,6 +130,8 @@ render :: GameState -> Picture
 render game = applyViewPortToPicture (game^.viewPort) $ mconcat  [ renderRiver game
                                                                  , renderBreath game
                                                                  , renderStreak game
+                                                                 , renderBird game
+                                                                 , renderRipple game
                                                                  ]
 
 renderStreak :: GameState -> Picture
@@ -140,14 +162,17 @@ renderExhaleRing gameState = if gameState^.breath.direction == Exhale then if in
                                                                               else color exhaleTransparent (thickCircle exhaleTo exhaleDiameter) 
                                                                       else mempty
 
-{-
-renderInhaleRing :: GameState -> Picture
-renderInhaleRing gameState = case gameState ^. breath.direction of
-                             Inhale -> color inhale (thickCircle inhaleTo inhaleDiameter)
-                             Exhale -> color inhaleTransparent (thickCircle inhaleTo inhaleDiameter)
+renderBird :: GameState -> Picture
+renderBird game = game^.assets.birdUp
 
-renderExhaleRing :: GameState -> Picture
-renderExhaleRing gameState = case gameState ^. breath.direction of
-                             Exhale -> color exhale (thickCircle exhaleTo exhaleDiameter)
-                             Inhale -> color exhaleTransparent (thickCircle exhaleTo exhaleDiameter)
--}
+renderRipple :: GameState -> Picture
+renderRipple game = translate x y $ game^.assets.ripple
+                      where (x,y) = game^.ripplePos
+
+main :: IO ()
+main = do
+  Just birdDown <- loadJuicyPNG "boid.png"
+  Just birdUp <- loadJuicyPNG "boidup.png"
+  Just ripple <- loadJuicyPNG "ripple.png"
+  let assets = Assets  (scale 0.2 0.2 $ birdDown) (scale 0.2 0.2 $ birdUp) (scale 0.2 0.2 $ ripple)
+  play (InWindow "Relax!" (800, 600) (0,0)) background 60 (initialState assets) render guardEvent tick
