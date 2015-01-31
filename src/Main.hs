@@ -12,13 +12,13 @@ import System.Random
 import Data.Monoid
 import Control.Monad.State
 import Control.Lens
+import Control.Applicative
 
+inhaleTo = 40
+inhaleDiameter = 20
 
-inhaleTo = 35
-inhaleDiameter = 15
-
-exhaleTo = 13
-exhaleDiameter = 10
+exhaleTo = 20
+exhaleDiameter = 15
 
 background = makeColor8 255 231 186 0
 inhale = makeColor8 84 255 157 255
@@ -42,7 +42,10 @@ data GameState = GameState { _keyState :: KeyboardState
                            , _time :: Float
                            , _ripplePos :: Ripple
                            , _gen :: StdGen
+                           , _clouds :: [Cloud]
                            }
+
+data Cloud = Cloud { _cloudPos :: (Float, Float) }
 
 data Camera = Camera { _viewPort :: ViewPort
                      , _targetPos :: (Float, Float)
@@ -75,6 +78,7 @@ data Bird = Bird { _position :: (Float, Float)
 data Assets = Assets { _birdDown :: Picture
                      , _birdUp :: Picture
                      , _ripple :: Picture
+                     , _cloud :: Picture
                      }
                      
 type Ripple = (Float, Float)
@@ -88,15 +92,14 @@ makeLenses ''BirdEvent
 makePrisms ''BirdEvent     
 makeLenses ''Camera
 
-initialState :: StdGen -> Assets -> GameState
+initialState :: StdGen -> Assets -> [Cloud] -> GameState
 initialState gen assets = GameState (KeyboardState False 1000000) (BreathState 30 Exhale 0 0) initialCamera initialBird assets 0 (-200,-100) gen
 
 initialCamera :: Camera
-initialCamera = Camera viewPortInit (0,0) 10 False
+initialCamera = Camera viewPortInit (0,0) 300 False
 
 initialBird :: Bird
-initialBird = Bird (-500,100) 0 (Straight 4 100) (-1)
--- initialBird = Bird (-400, 100) 0 (Curve 1 0.1 1 0 1 200 1)
+initialBird = Bird (-500,100) 0 (Straight 8 50) (-1)
 
 type Time = Float
 
@@ -112,16 +115,16 @@ randomizeBirdEvent = do
     camera.followBird .= True
   where
     newStraight g = let (d, g'') = randomR (2, 5) g
-                        (s, g''') = randomR (50, 200) g''
+                        (s, g''') = randomR (200, 400) g''
                      in do
                         bird.event .= Straight d s
                         gen .= g'''
     newCurve g = let (d, g2) = randomR (1, 3) g
                      (cl, g3) = randomR (0,2) g2
-                     (cc, g4) = randomR (1,3) g3
+                     (cc, g4) = randomR (0,2) g3
                      (ga, g5) = randomR (-20,200) g4
                      (angs, g6) = randomR (0.5, 3) g5
-                     (airs, g7) = randomR (50,200) g6
+                     (airs, g7) = randomR (200,400) g6
                      dr = cc
                   in do
                      bird.event .= Curve d cl cc ga angs airs dr
@@ -158,9 +161,16 @@ tick f game = return $ flip execState game $ do
     time += f
     when (gameState^.camera.followBird) $
          do
-           --let dx = gameState^.bird.position._1 + camera.viewPort.viewTranslate._1
-             --  dy = gameState^.bird.position._2 + camera.viewPort.viewTranslate._2
-           (camera.viewPort.viewTranslate .= ((gameState^.bird.position) & each *~ (-1)))
+           let dx = gameState^.bird.position._1 + gameState^.camera.viewPort.viewTranslate._1
+               dy = gameState^.bird.position._2 + gameState^.camera.viewPort.viewTranslate._2
+               hyp = (dx * dx + dy * dy)**0.5 :: Float
+               vx = dx / hyp
+               vy = dy / hyp
+               changex = (vx * f * gameState^.camera.cameraSpeed)
+               changey = (vy * f * gameState^.camera.cameraSpeed)
+           camera.viewPort.viewTranslate._1 -= (signum changex) * (min (abs dx) (abs changex))
+           camera.viewPort.viewTranslate._2 -= (signum changey) * (min (abs dy) (abs changey))
+           --(camera.viewPort.viewTranslate .= ((gameState^.bird.position) & each *~ (-1)))
     bird.flapDuration -= f
 
 viewTranslate :: Lens' ViewPort (Float, Float)
@@ -217,20 +227,22 @@ inExhaleRing breath = between (breath ^. level) (exhaleTo - exhaleDiameter/2) (e
 
 renderScene :: GameState -> Picture
 renderScene game = applyViewPortToPicture (game^.camera.viewPort) $ 
-                   mconcat  [ renderRiver game
-                            , renderBreath game
+                   mconcat  [ renderClouds game
+                            , renderRiver game
                             , renderBird game
-                            --, renderRipple game
+                            , renderBreath game
                             ]
 
 renderUI :: GameState -> Picture
 renderUI game = renderStreak game
-                             
+
 render :: GameState -> IO Picture
-render game = return $ pictures [ renderScene game, renderUI game]
+render game = return $ pictures [ renderScene game
+                                , renderUI game
+                                ]
 
 renderStreak :: GameState -> Picture
-renderStreak game = translate 350 (-200) $ scale 0.5 0.5 $ text . show $ game ^. breath.currentStreak
+renderStreak game = color black $ translate (-300) (-270) $ scale 0.5 0.5 $ text . show $ game ^. breath.currentStreak
 
 renderLastPress :: GameState -> Picture
 renderLastPress game = text . show $ game ^. keyState.lastPress
@@ -266,6 +278,12 @@ renderBird game = uncurry translate (game^.bird.position) $
                 then game^.assets.birdDown
                 else game^.assets.birdUp
 
+renderCloud :: GameState -> Cloud -> Picture
+renderCloud game (Cloud (x,y)) = translate x y $ game^.assets.cloud
+
+renderClouds :: GameState -> Picture
+renderClouds game = pictures $ map (renderCloud game) (game^.clouds)
+
 renderRipple :: GameState -> Picture
 renderRipple game = translate x y $ game^.assets.ripple
                       where (x,y) = game^.ripplePos
@@ -275,6 +293,10 @@ main = do
   Just birdDown <- loadJuicyPNG "assets/boiddown.png"
   Just birdUp <- loadJuicyPNG "assets/boidup.png"
   Just ripple <- loadJuicyPNG "assets/ripple.png"
+  Just cloud <- loadJuicyPNG "assets/cloud.png"
   g <- getStdGen
-  let assets = Assets  (scale 0.2 0.2 $ birdDown) (scale 0.2 0.2 $ birdUp) (scale 0.2 0.2 $ ripple)
-  playIO (InWindow "Breathe :)" (800, 600) (0,0)) background 60 (initialState g assets) render processInput tick
+  xs <- replicateM 16000 (randomRIO (-50000, 50000))
+  ys <- replicateM 8000 (randomRIO (500, 100000))
+  let clouds = fmap Cloud $ zipWith (,) xs ys
+  let assets = Assets  (scale 0.2 0.2 $ birdDown) (scale 0.2 0.2 $ birdUp) (scale 0.2 0.2 $ ripple) (scale 1 1 $ cloud)
+  playIO (InWindow "Breathe :)" (800, 600) (0,0)) background 60 (initialState g assets clouds) render processInput tick 
