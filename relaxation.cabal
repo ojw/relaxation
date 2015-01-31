@@ -19,6 +19,6 @@ executable relaxation
   main-is:             Main.hs
   -- other-modules:       
   -- other-extensions:    
-  build-depends:       base >=4.6 && <4.7, gloss, lens, mtl, gloss-juicy
+  build-depends:       base >=4.6 && <4.7, gloss, lens, mtl, gloss-juicy, random
   hs-source-dirs:      src
   default-language:    Haskell2010
