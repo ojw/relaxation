@@ -158,8 +158,8 @@ tick f game = return $ flip execState game $ do
     time += f
     when (gameState^.camera.followBird) $
          do
-           let dx = gameState^.bird.position._1 + camera.viewPort.viewTranslate._1
-               dy = gameState^.bird.position._2 + camera.viewPort.viewTranslate._2
+           --let dx = gameState^.bird.position._1 + camera.viewPort.viewTranslate._1
+             --  dy = gameState^.bird.position._2 + camera.viewPort.viewTranslate._2
            (camera.viewPort.viewTranslate .= ((gameState^.bird.position) & each *~ (-1)))
     bird.flapDuration -= f
 
@@ -272,9 +272,9 @@ renderRipple game = translate x y $ game^.assets.ripple
 
 main :: IO ()
 main = do
-  Just birdDown <- loadJuicyPNG "boiddown.png"
-  Just birdUp <- loadJuicyPNG "boidup.png"
-  Just ripple <- loadJuicyPNG "ripple.png"
+  Just birdDown <- loadJuicyPNG "assets/boiddown.png"
+  Just birdUp <- loadJuicyPNG "assets/boidup.png"
+  Just ripple <- loadJuicyPNG "assets/ripple.png"
   g <- getStdGen
   let assets = Assets  (scale 0.2 0.2 $ birdDown) (scale 0.2 0.2 $ birdUp) (scale 0.2 0.2 $ ripple)
   playIO (InWindow "Breathe :)" (800, 600) (0,0)) background 60 (initialState g assets) render processInput tick
