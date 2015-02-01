@@ -34,6 +34,8 @@ data BreathState = BreathState { _level :: Float
                                , _currentStreak :: Int
                                }
 
+data Mode = Splash | Game deriving (Eq)
+
 data GameState = GameState { _keyState :: KeyboardState
                            , _breath :: BreathState
                            , _camera :: Camera
@@ -43,6 +45,7 @@ data GameState = GameState { _keyState :: KeyboardState
                            , _ripplePos :: Ripple
                            , _gen :: StdGen
                            , _clouds :: [Cloud]
+                           , _mode :: Mode
                            }
 
 data Cloud = Cloud { _cloudPos :: (Float, Float) }
@@ -93,7 +96,7 @@ makePrisms ''BirdEvent
 makeLenses ''Camera
 
 initialState :: StdGen -> Assets -> [Cloud] -> GameState
-initialState gen assets = GameState (KeyboardState False 1000000) (BreathState 30 Exhale 0 0) initialCamera initialBird assets 0 (-200,-100) gen
+initialState gen assets clouds = GameState (KeyboardState False 1000000) (BreathState 30 Exhale 0 0) initialCamera initialBird assets 0 (-200,-100) gen clouds Splash
 
 initialCamera :: Camera
 initialCamera = Camera viewPortInit (0,0) 300 False
@@ -131,7 +134,12 @@ randomizeBirdEvent = do
                      gen .= g7
 
 tick :: Float -> GameState -> IO GameState
-tick f game = return $ flip execState game $ do
+tick f game = case game^.mode of
+                Game -> tickGame f game
+                Splash -> tickSplash f game
+
+tickBreath :: Float -> State GameState ()
+tickBreath f = do
     gameState <- get
     if view (keyState . spacePressed) gameState
       then breath.level += 8*f
@@ -143,6 +151,10 @@ tick f game = return $ flip execState game $ do
        else if gameState^.breath.level > inhaleTo + inhaleDiameter/2
                then breath.direction .= Exhale
                else return ()
+
+tickBird :: Float -> State GameState ()
+tickBird f = do
+    gameState <- get
     case gameState^.bird.event of
       Curve dur lin con goal angspd airspd dr -> do
         bird.event.deltaR += lin * f
@@ -158,20 +170,54 @@ tick f game = return $ flip execState game $ do
         bird.position._2 += f * s * sin (gameState^.bird.rotation / 180 * pi)
         e <- bird.event <%= (duration -~ f)
         when (e^.duration < 0) randomizeBirdEvent
-    time += f
-    when (gameState^.camera.followBird) $
-         do
-           let dx = gameState^.bird.position._1 + gameState^.camera.viewPort.viewTranslate._1
-               dy = gameState^.bird.position._2 + gameState^.camera.viewPort.viewTranslate._2
-               hyp = (dx * dx + dy * dy)**0.5 :: Float
-               vx = dx / hyp
-               vy = dy / hyp
-               changex = (vx * f * gameState^.camera.cameraSpeed)
-               changey = (vy * f * gameState^.camera.cameraSpeed)
-           camera.viewPort.viewTranslate._1 -= (signum changex) * (min (abs dx) (abs changex))
-           camera.viewPort.viewTranslate._2 -= (signum changey) * (min (abs dy) (abs changey))
-           --(camera.viewPort.viewTranslate .= ((gameState^.bird.position) & each *~ (-1)))
+
     bird.flapDuration -= f
+
+tickCamera :: Float -> State GameState ()
+tickCamera f = do gameState <- get
+                  if gameState^.camera.followBird
+                    then followBird'
+                    else when (gameState^.camera.viewPort.viewTranslate /= (0,0)) returnHome
+  where
+    followBird' = do
+      gameState <- get
+      let dx = gameState^.bird.position._1 + gameState^.camera.viewPort.viewTranslate._1
+          dy = gameState^.bird.position._2 + gameState^.camera.viewPort.viewTranslate._2
+          hyp = (dx * dx + dy * dy)**0.5 :: Float
+          vx = dx / hyp
+          vy = dy / hyp
+          changex = (vx * f * gameState^.camera.cameraSpeed)
+          changey = (vy * f * gameState^.camera.cameraSpeed)
+      camera.viewPort.viewTranslate._1 -= (signum changex) * (min (abs dx) (abs changex))
+      camera.viewPort.viewTranslate._2 -= (signum changey) * (min (abs dy) (abs changey))
+
+    returnHome = do
+      gameState <- get
+      let dx = gameState^.camera.viewPort.viewTranslate._1
+          dy = gameState^.camera.viewPort.viewTranslate._2
+          hyp = (dx * dx + dy * dy)**0.5 :: Float
+          vx = dx / hyp
+          vy = dy / hyp
+          changex = (vx * f * gameState^.camera.cameraSpeed) * abs dx / 10
+          changey = (vy * f * gameState^.camera.cameraSpeed) * abs dx / 10
+      camera.viewPort.viewTranslate._1 -= (signum changex) * (min (abs dx) (abs changex))
+      camera.viewPort.viewTranslate._2 -= (signum changey) * (min (abs dy) (abs changey))
+
+tickGame :: Float -> GameState -> IO GameState
+tickGame f game = return $ flip execState game $ do
+    time += f
+    tickBreath f
+    tickBird f
+    tickCamera f
+
+tickSplash :: Float -> GameState -> IO GameState
+tickSplash f game = return $ flip execState game $ do
+    time += f
+    tickBreath f
+    game <- get
+    if game^.breath.currentStreak >= 3
+       then mode .= Game
+       else return ()
 
 viewTranslate :: Lens' ViewPort (Float, Float)
 viewTranslate f (ViewPort t r s) = fmap (\t' -> ViewPort t' r s) (f t)
@@ -215,7 +261,7 @@ between target low hi = low < target && target < hi
 missBreath :: State GameState ()
 missBreath = do game <- get
                 breath.currentStreak .= 0
-                camera.viewPort.viewTranslate .= (0,0)
+                -- camera.viewPort.viewTranslate .= (0,0)
                 when (game^.camera.followBird == True) (bird .= initialBird)
                 camera.followBird .= False
 
@@ -234,7 +280,7 @@ renderScene game = applyViewPortToPicture (game^.camera.viewPort) $
                             ]
 
 renderUI :: GameState -> Picture
-renderUI game = renderStreak game
+renderUI game = renderStreak game <> renderSplash game
 
 render :: GameState -> IO Picture
 render game = return $ pictures [ renderScene game
@@ -248,14 +294,14 @@ renderLastPress :: GameState -> Picture
 renderLastPress game = text . show $ game ^. keyState.lastPress
 
 renderRiver :: GameState -> Picture
-renderRiver game = mconcat [ translate 0 (-100) (rectangleSolid 80000 5)
-                           , translate 0 0 (rectangleSolid 80000 3)
+renderRiver game = mconcat [ color black $ translate 0 (-100) (rectangleSolid 80000 5)
+                           , color black $ translate 0 0 (rectangleSolid 80000 3)
                            ]
 
 renderBreath :: GameState -> Picture
 renderBreath gameState = translate  (-350) (-250) (mconcat  [ renderInhaleRing gameState
                                                             , renderExhaleRing gameState
-                                                            , thickCircle (gameState ^. breath.level) 1])
+                                                            , color black $ thickCircle (gameState ^. breath.level) 1])
 
 renderInhaleRing :: GameState -> Picture
 renderInhaleRing gameState = if gameState^.breath.direction == Inhale then  if inInhaleRing (gameState^.breath)
@@ -284,9 +330,17 @@ renderCloud game (Cloud (x,y)) = translate x y $ game^.assets.cloud
 renderClouds :: GameState -> Picture
 renderClouds game = pictures $ map (renderCloud game) (game^.clouds)
 
-renderRipple :: GameState -> Picture
-renderRipple game = translate x y $ game^.assets.ripple
-                      where (x,y) = game^.ripplePos
+renderSplash :: GameState -> Picture
+renderSplash game = if game^.mode == Splash
+                       then message
+                       else mempty
+  where
+    message = pictures $ map (color black) [ translate (-200) 150 $ scale 1 1 $ text "Breathe."
+                                           , translate (-200) 100 $ scale 0.3 0.3 $ text "Hold <space> to inhale,"
+                                           , translate (-200) 70 $ scale 0.3 0.3 $ text "and release to exhale."
+                                           , translate (-200) 30 $ scale 0.15 0.15 $ text "Stay in the rings, and keep breathing."
+                                           ]
+
 
 main :: IO ()
 main = do
@@ -296,7 +350,7 @@ main = do
   Just cloud <- loadJuicyPNG "assets/cloud.png"
   g <- getStdGen
   xs <- replicateM 16000 (randomRIO (-50000, 50000))
-  ys <- replicateM 8000 (randomRIO (500, 100000))
+  ys <- replicateM 8000 (randomRIO (400, 100000))
   let clouds = fmap Cloud $ zipWith (,) xs ys
   let assets = Assets  (scale 0.2 0.2 $ birdDown) (scale 0.2 0.2 $ birdUp) (scale 0.2 0.2 $ ripple) (scale 1 1 $ cloud)
   playIO (InWindow "Breathe :)" (800, 600) (0,0)) background 60 (initialState g assets clouds) render processInput tick 
